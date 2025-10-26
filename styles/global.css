@@ -1,0 +1,199 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Hide the default Mapbox controls in the top-left corner */
+.mapboxgl-ctrl-top-left {
+  display: none !important;
+}
+
+.mapboxgl-popup-close-button {
+  color: white !important;
+}
+
+@keyframes blink {
+  0% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+.blinking-marker {
+  background-color: red;
+  opacity: 50%;
+  animation: blink 1s infinite; /* Blinks every second */
+}
+
+/* Styling for title overlay */
+.map-title {
+  position: absolute;
+  top: 60px;
+  left: 0;
+  right: 0;
+  z-index: 15;
+  text-align: center;
+  pointer-events: none;
+}
+
+.title-container {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background-color: rgba(0, 0, 0, 0.5);
+  padding: 5px 20px;
+  border-radius: 4px;
+}
+
+.title-container h1 {
+  color: #16a34a;
+  font-size: 24px;
+  font-weight: bold;
+  margin: 0 15px;
+  letter-spacing: 2px;
+}
+
+.title-decoration {
+  height: 2px;
+  width: 50px;
+  background: linear-gradient(90deg, transparent, #16a34a, transparent);
+}
+
+.title-decoration.left {
+  background: linear-gradient(90deg, transparent, #16a34a);
+}
+
+.title-decoration.right {
+  background: linear-gradient(90deg, #16a34a, transparent);
+}
+
+/* Styling for POI markers and labels */
+.poi-marker {
+  cursor: pointer;
+  border: 1px solid white;
+  box-shadow: 0 0 5px rgba(0, 0, 0, 0.5);
+}
+
+.poi-label {
+  pointer-events: none;
+  margin-bottom: 20px;
+  text-align: center;
+  font-weight: bold;
+  text-shadow: 0 0 3px black;
+}
+
+.building-label {
+  margin-bottom: 30px;
+  font-size: 11px;
+  font-weight: bold;
+  text-shadow: 0 0 4px black;
+}
+
+/* Styling for marker icons */
+.marker-icon {
+  cursor: pointer;
+  filter: drop-shadow(0px 0px 3px rgba(0, 0, 0, 0.7));
+  transition: all 0.2s ease;
+}
+
+.marker-icon:hover {
+  transform: scale(1.2);
+}
+
+/* Styling for popup */
+.mapboxgl-popup-content {
+  background-color: rgba(30, 41, 59, 0.9) !important;
+  color: white !important;
+  border: 1px solid #16a34a !important;
+  padding: 10px !important;
+  border-radius: 4px !important;
+}
+
+.mapboxgl-popup-tip {
+  border-top-color: #16a34a !important;
+  border-bottom-color: #16a34a !important;
+}
+
+.mapboxgl-popup-close-button {
+  color: white !important;
+}
+
+/* Styling for popup content */
+.popup-content {
+  font-family: Arial, sans-serif;
+}
+
+.popup-title {
+  font-weight: bold;
+  font-size: 14px;
+  margin-bottom: 5px;
+  color: #16a34a;
+}
+
+.popup-category {
+  font-size: 12px;
+  color: #e2e8f0;
+}
+
+.popup-height {
+  font-size: 12px;
+  color: #e2e8f0;
+  margin-top: 2px;
+}
+
+/* Styling for map controls */
+.mapboxgl-ctrl-group {
+  background-color: rgba(30, 41, 59, 0.9) !important;
+  border: 1px solid #16a34a !important;
+}
+
+.mapboxgl-ctrl-group button {
+  color: white !important;
+}
+
+.mapboxgl-ctrl-group button:hover {
+  background-color: rgba(22, 163, 74, 0.3) !important;
+}
+
+.mapboxgl-ctrl-group button.mapboxgl-ctrl-active {
+  background-color: rgba(22, 163, 74, 0.5) !important;
+}
+
+.mapboxgl-ctrl-scale {
+  background-color: rgba(30, 41, 59, 0.9) !important;
+  border-color: #16a34a !important;
+  color: white !important;
+}
+
+/* Toggle switch animation */
+.toggle-switch {
+  transition: all 0.3s ease;
+}
+
+.toggle-knob {
+  transition: transform 0.3s ease;
+}
+
+/* Search marker animation */
+.search-marker {
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.5);
+    opacity: 0.7;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
