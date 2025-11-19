@@ -1,141 +1,183 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import mapboxgl, { Map } from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
-
-// Flight data interfaces based on the provided structure
-interface PositionBuffer {
-  recentPositionsList: Array<{
-    deltaLat: number;
-    deltaLon: number;
-    deltaMs: number;
-  }>;
-}
-
-interface Flight {
-  flightid: number;
-  lat: number;
-  lon: number;
-  track: number;
-  alt: number;
-  speed: number;
-  icon: string;
-  status: string;
-  timestamp: number;
-  onGround: boolean;
-  callsign: string;
-  source: string;
-  positionBuffer: PositionBuffer;
-  timestampMs: string;
-}
-
-interface FlightData {
-  flightsList: Flight[];
-}
+import type { 
+  Flight, FlightData, Ship, ShipData,
+  FlightMarker, ShipMarker, 
+} from './TerritoryMap/types';
+import {
+  createAirplaneIcon,
+  updateAirplaneIconRotation,
+  createShipIcon,
+  updateShipIconRotation,
+    createPopupHTML,
+  createShipPopupHTML,
+} from './TerritoryMap/markerUtils';
 
 const TerritoryMap = () => {
   const mapContainer = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
-  const markersRef = useRef<mapboxgl.Marker[]>([]);
+  const flightMarkersRef = useRef<globalThis.Map<number, FlightMarker>>(new globalThis.Map<number, FlightMarker>());
+  const shipMarkersRef = useRef<globalThis.Map<number | string, ShipMarker>>(new globalThis.Map<number | string, ShipMarker>());
   const [flightData, setFlightData] = useState<FlightData | null>(null);
+  const [shipData, setShipData] = useState<ShipData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isMaritimeLoading, setIsMaritimeLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [isMapLoading, setIsMapLoading] = useState(true);
+  const [isRealTimeEnabled, setIsRealTimeEnabled] = useState(false);
+  const refreshIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Indonesia center coordinates
   const indonesiaCenter: [number, number] = [118, -2];
 
-  // Function to create airplane icon SVG
-  const createAirplaneIcon = (callsign: string, status: string) => {
-    const el = document.createElement('div');
-    el.className = 'flight-marker';
-    el.style.width = '32px';
-    el.style.height = '32px';
-    el.style.cursor = 'pointer';
-    
-    // Color based on status
-    const color = status === 'NORMAL' ? '#22c55e' : '#ef4444';
-    
-    el.innerHTML = `
-      <svg width="32" height="32" viewBox="0 0 24 24" fill="${color}" xmlns="http://www.w3.org/2000/svg">
-        <path d="M21 16v-2l-8-5V3.5c0-.83-.67-1.5-1.5-1.5S10 2.67 10 3.5V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5l8 2.5z"/>
-      </svg>
-    `;
-    
-    return el;
-  };
-
-  // Function to add flight markers to map
-  const addFlightMarkersToMap = (map: Map, flights: Flight[]) => {
+  const updateFlightMarkers = (map: mapboxgl.Map, flights: Flight[]) => {
     try {
-      console.log("Adding flight markers to map");
+      const existingFlightIds = new Set(flightMarkersRef.current.keys());
+      const currentFlightIds = new Set(flights.map(f => f.flightid));
 
-      // Clear existing markers
-      markersRef.current.forEach((marker) => marker.remove());
-      markersRef.current = [];
-
-      flights.forEach((flight) => {
-        try {
-          const el = createAirplaneIcon(flight.callsign, flight.status);
-
-          // Create popup with flight information
-          const popup = new mapboxgl.Popup({ offset: 25 }).setHTML(`
-            <div class="popup-content" style="min-width: 200px;">
-              <h3 class="popup-title" style="margin: 0 0 8px 0; font-weight: bold; color: #1f2937;">
-                ${flight.callsign || 'Unknown Flight'}
-              </h3>
-              <div style="font-size: 12px; color: #4b5563;">
-                <p style="margin: 2px 0;"><strong>Flight ID:</strong> ${flight.flightid}</p>
-                <p style="margin: 2px 0;"><strong>Aircraft:</strong> ${flight.icon}</p>
-                <p style="margin: 2px 0;"><strong>Altitude:</strong> ${flight.alt.toLocaleString()} ft</p>
-                <p style="margin: 2px 0;"><strong>Speed:</strong> ${flight.speed} kts</p>
-                <p style="margin: 2px 0;"><strong>Track:</strong> ${flight.track}°</p>
-                <p style="margin: 2px 0;"><strong>Status:</strong> ${flight.status}</p>
-                <p style="margin: 2px 0;"><strong>Source:</strong> ${flight.source}</p>
-                <p style="margin: 2px 0;"><strong>On Ground:</strong> ${flight.onGround ? 'Yes' : 'No'}</p>
-                <p style="margin: 2px 0;"><strong>Coordinates:</strong> ${flight.lat.toFixed(4)}, ${flight.lon.toFixed(4)}</p>
-              </div>
-            </div>
-          `);
-
-          // Add marker to map
-          const flightMarker = new mapboxgl.Marker(el)
-            .setLngLat([flight.lon, flight.lat])
-            .setPopup(popup)
-            .addTo(map);
-          
-          markersRef.current.push(flightMarker);
-
-          // Add label with callsign
-          if (flight.callsign) {
-            const label = document.createElement("div");
-            label.className = "flight-label";
-            label.textContent = flight.callsign;
-            label.style.color = "#ffffff";
-            label.style.backgroundColor = "rgba(0, 0, 0, 0.7)";
-            label.style.padding = "2px 6px";
-            label.style.borderRadius = "4px";
-            label.style.fontSize = "10px";
-            label.style.fontWeight = "bold";
-            label.style.whiteSpace = "nowrap";
-            label.style.pointerEvents = "none";
-
-            const labelMarker = new mapboxgl.Marker(label, { anchor: "top" })
-              .setLngLat([flight.lon, flight.lat])
-              .addTo(map);
-            
-            markersRef.current.push(labelMarker);
+      existingFlightIds.forEach((flightId) => {
+        const id = flightId as number;
+        if (!currentFlightIds.has(id)) {
+          const flightMarker = flightMarkersRef.current.get(id);
+          if (flightMarker) {
+            flightMarker.marker.remove();
+            if (flightMarker.labelMarker) {
+              flightMarker.labelMarker.remove();
+            }
+            flightMarkersRef.current.delete(id);
           }
-        } catch (error) {
-          console.error(`Error adding flight marker for ${flight.callsign}:`, error);
         }
       });
 
-      console.log(`Added ${flights.length} flight markers successfully`);
+      flights.forEach((flight) => {
+        try {
+          // Skip flights with invalid coordinates
+          if (flight.lat === null || flight.lat === undefined || flight.lon === null || flight.lon === undefined) {
+            console.warn('Skipping flight with invalid coordinates:', flight);
+            return;
+          }
+
+          const existingMarker = flightMarkersRef.current.get(flight.flightid);
+
+          if (existingMarker) {
+            const newPosition: [number, number] = [flight.lon, flight.lat];
+            
+            existingMarker.marker.setLngLat(newPosition);
+            
+            updateAirplaneIconRotation(existingMarker.element, flight.track);
+            
+            const popup = new mapboxgl.Popup({ offset: 25 }).setHTML(createPopupHTML(flight));
+            existingMarker.marker.setPopup(popup);
+            
+            if (existingMarker.labelMarker) {
+              existingMarker.labelMarker.setLngLat(newPosition);
+            }
+          } else {
+            const el = createAirplaneIcon(flight.callsign, flight.status, flight.track);
+            const popup = new mapboxgl.Popup({ offset: 25 }).setHTML(createPopupHTML(flight));
+
+            const flightMarker = new mapboxgl.Marker(el)
+              .setLngLat([flight.lon, flight.lat])
+              .setPopup(popup)
+              .addTo(map);
+
+            let labelMarker: mapboxgl.Marker | undefined;
+            let labelElement: HTMLElement | undefined;
+
+            // Labels disabled - no label creation
+
+            flightMarkersRef.current.set(flight.flightid, {
+              marker: flightMarker,
+              labelMarker,
+              element: el,
+              labelElement
+            });
+          }
+        } catch (error) {
+          console.error(`Error updating flight marker for ${flight.callsign}:`, error);
+        }
+      });
+
+      console.log(`Updated ${flights.length} flight markers (${flightMarkersRef.current.size} total)`);
     } catch (error) {
-      console.error("Error adding flight markers to map:", error);
+      console.error("Error updating flight markers:", error);
+    }
+  };
+
+  const updateShipMarkers = (map: mapboxgl.Map, ships: Ship[]) => {
+    try {
+      const existingShipIds = new Set(shipMarkersRef.current.keys());
+      const currentShipIds = new Set(ships.map(s => String(s.mmsi || s.imo || s.uuid || `${s.lat}-${s.lon}`)));
+
+      existingShipIds.forEach((shipId) => {
+        const idStr = String(shipId);
+        if (!currentShipIds.has(idStr)) {
+          const shipMarker = shipMarkersRef.current.get(idStr);
+          if (shipMarker) {
+            shipMarker.marker.remove();
+            if (shipMarker.labelMarker) {
+              shipMarker.labelMarker.remove();
+            }
+            shipMarkersRef.current.delete(idStr);
+          }
+        }
+      });
+
+      ships.forEach((ship) => {
+        try {
+          // Skip if no coordinates
+          if (ship.lat === undefined || ship.lat === null || ship.lon === undefined || ship.lon === null) {
+            console.warn('Ship missing coordinates:', ship);
+            return;
+          }
+
+          const shipId = String(ship.uuid || ship.mmsi || ship.imo || `${ship.lat}-${ship.lon}`);
+          const shipName = ship.name || ship.name_ais || 'Ship';
+          const existingMarker = shipMarkersRef.current.get(shipId);
+
+          if (existingMarker) {
+            const newPosition: [number, number] = [ship.lon, ship.lat];
+            existingMarker.marker.setLngLat(newPosition);
+            if (ship.heading !== undefined) {
+              updateShipIconRotation(existingMarker.element, ship.heading);
+            }
+            const popup = new mapboxgl.Popup({ offset: 25 }).setHTML(createShipPopupHTML(ship));
+            existingMarker.marker.setPopup(popup);
+            if (existingMarker.labelMarker) {
+              existingMarker.labelMarker.setLngLat(newPosition);
+            }
+          } else {
+            const el = createShipIcon(shipName, ship.heading || 0);
+            const popup = new mapboxgl.Popup({ offset: 25 }).setHTML(createShipPopupHTML(ship));
+
+            const shipMarker = new mapboxgl.Marker(el)
+              .setLngLat([ship.lon, ship.lat])
+              .setPopup(popup)
+              .addTo(map);
+
+            let labelMarker: mapboxgl.Marker | undefined;
+            let labelElement: HTMLElement | undefined;
+
+            // Labels disabled - no label creation
+
+            shipMarkersRef.current.set(shipId, {
+              marker: shipMarker,
+              labelMarker,
+              element: el,
+              labelElement
+            });
+          }
+        } catch (error) {
+          console.error(`Error updating ship marker:`, error);
+        }
+      });
+
+      console.log(`Updated ${ships.length} ship markers (${shipMarkersRef.current.size} total)`);
+    } catch (error) {
+      console.error("Error updating ship markers:", error);
     }
   };
 
@@ -144,7 +186,6 @@ const TerritoryMap = () => {
       try {
         setIsMapLoading(true);
         
-        // Fetch Mapbox token
         const response = await fetch('/api/mapbox-token');
         if (!response.ok) {
           throw new Error('Failed to fetch Mapbox token');
@@ -153,7 +194,6 @@ const TerritoryMap = () => {
         mapboxgl.accessToken = token;
 
         if (mapContainer.current) {
-          // Create map
           const map = new mapboxgl.Map({
             container: mapContainer.current,
             style: 'mapbox://styles/mapbox/streets-v12',
@@ -166,14 +206,19 @@ const TerritoryMap = () => {
 
           mapRef.current = map;
 
-          // Handle map load
           map.on('load', () => {
             console.log('Map loaded successfully');
             setIsMapLoading(false);
+            map.resize();
             fetchFlightData();
+            fetchMaritimeData();
           });
 
-          // Handle map errors
+          map.on('style.load', () => {
+            console.log('Map style loaded');
+            map.resize();
+          });
+
           map.on('error', (e) => {
             console.error('Mapbox error details:', {
               error: e.error,
@@ -197,17 +242,75 @@ const TerritoryMap = () => {
     fetchTokenAndInitMap();
 
     return () => {
-      // Clean up markers
-      markersRef.current.forEach((marker) => marker.remove());
-      markersRef.current = [];
+      flightMarkersRef.current.forEach((flightMarker: FlightMarker) => {
+        flightMarker.marker.remove();
+        if (flightMarker.labelMarker) {
+          flightMarker.labelMarker.remove();
+        }
+      });
+      flightMarkersRef.current.clear();
+
+      shipMarkersRef.current.forEach((shipMarker: ShipMarker) => {
+        shipMarker.marker.remove();
+        if (shipMarker.labelMarker) {
+          shipMarker.labelMarker.remove();
+        }
+      });
+      shipMarkersRef.current.clear();
+
       
-      // Remove map
+      if (refreshIntervalRef.current) {
+        clearInterval(refreshIntervalRef.current);
+      }
+      
       mapRef.current?.remove();
     };
   }, []);
 
-  const fetchFlightData = async () => {
-    setIsLoading(true);
+  const fetchMaritimeData = useCallback(async (silent: boolean = false) => {
+    if (!silent) {
+      setIsMaritimeLoading(true);
+    }
+    try {
+      console.log('Fetching maritime data...');
+      
+      // Fetch ships
+      const shipsResponse = await fetch('/api/maritime?type=ships');
+      if (shipsResponse.ok) {
+        const shipsData = await shipsResponse.json();
+        console.log('Ship data received:', shipsData);
+        
+        const ships = shipsData.ships || shipsData.data || shipsData.results || shipsData || [];
+        const shipsWithCoords = Array.isArray(ships) ? ships.filter((s: Ship) => s.lat !== undefined && s.lon !== undefined) : [];
+        
+        console.log(`Total ships received: ${ships.length}, Ships with coordinates: ${shipsWithCoords.length}`);
+        if (shipsWithCoords.length < ships.length) {
+          console.warn(`${ships.length - shipsWithCoords.length} ships missing coordinates`);
+        }
+        
+        setShipData({ ships: Array.isArray(ships) ? ships : [] });
+        
+        if (mapRef.current && shipsWithCoords.length > 0) {
+          console.log(`Updating ${shipsWithCoords.length} ships on map`);
+          updateShipMarkers(mapRef.current, shipsWithCoords);
+        } else if (mapRef.current && ships.length > 0) {
+          console.warn('Ships received but none have coordinates. Ships data:', ships.slice(0, 2));
+        }
+      }
+
+    } catch (error) {
+      console.error("Error fetching maritime data:", error);
+    } finally {
+      if (!silent) {
+        setIsMaritimeLoading(false);
+      }
+    }
+  }, []);
+
+  const fetchFlightData = useCallback(async (silent: boolean = false) => {
+    if (!silent) {
+      setIsLoading(true);
+    }
     setError(null);
     try {
       console.log('Fetching flight data...');
@@ -218,27 +321,61 @@ const TerritoryMap = () => {
       const data = await response.json();
       console.log('Flight data received:', data);
       
-      setFlightData(data);
+      const flights = data.flightsList || data.flights || data.data?.flightsList || data.data?.flights || [];
+      
+      if (flights.length === 0) {
+        console.warn('No flights found in response:', data);
+      }
+      
+      setFlightData({ flightsList: flights });
       setIsDrawerOpen(true);
       
-      // Add markers to map
-      if (mapRef.current && data.flightsList) {
-        addFlightMarkersToMap(mapRef.current, data.flightsList);
+      if (mapRef.current && flights.length > 0) {
+        console.log(`Updating ${flights.length} flights on map`);
+        updateFlightMarkers(mapRef.current, flights);
+      } else if (mapRef.current) {
+        console.warn('Map is ready but no flights to display');
       }
     } catch (error) {
       console.error("Error fetching flight data:", error);
       setError(error instanceof Error ? error.message : "Failed to fetch flight data");
     } finally {
-      setIsLoading(false);
+      if (!silent) {
+        setIsLoading(false);
+      }
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    if (!isRealTimeEnabled || !mapRef.current) {
+      return;
+    }
+
+    if (refreshIntervalRef.current) {
+      clearInterval(refreshIntervalRef.current);
+    }
+
+    refreshIntervalRef.current = setInterval(() => {
+      if (mapRef.current) {
+        fetchFlightData(true);
+        fetchMaritimeData(true);
+      }
+    }, 5000);
+
+    return () => {
+      if (refreshIntervalRef.current) {
+        clearInterval(refreshIntervalRef.current);
+      }
+    };
+  }, [isRealTimeEnabled, fetchFlightData, fetchMaritimeData]);
 
   const refreshFlightData = () => {
-    fetchFlightData();
+    fetchFlightData(false);
+    fetchMaritimeData(false);
   };
 
   return (
-    <div className="relative h-screen">
+    <div className="relative h-screen w-full">
       {/* Map Loading Indicator */}
       {isMapLoading && (
         <div className="absolute inset-0 flex items-center justify-center bg-gray-900 bg-opacity-70 z-30">
@@ -249,14 +386,25 @@ const TerritoryMap = () => {
         </div>
       )}
 
+      {/* Error Display */}
+      {error && !isMapLoading && (
+        <div className="absolute top-4 left-1/2 transform -translate-x-1/2 bg-red-600 text-white px-4 py-2 rounded z-40">
+          {error}
+        </div>
+      )}
+
       {/* Map Container */}
-      <div ref={mapContainer} className="absolute top-0 left-0 right-0 bottom-0" />
+      <div 
+        ref={mapContainer} 
+        className="absolute top-0 left-0 right-0 bottom-0 w-full h-full z-10"
+        style={{ minHeight: '100vh' }}
+      />
       
-      {/* Flight Data Drawer */}
+      {/* Data Drawer */}
       {isDrawerOpen && (
-        <div className="absolute top-0 left-0 w-96 h-full bg-gray-900 bg-opacity-95 text-white p-4 overflow-y-auto z-20">
+        <div className="absolute top-0 left-0 w-96 h-full bg-gray-900 bg-opacity-95 text-white p-4 overflow-y-auto z-20 shadow-2xl">
           <div className="flex justify-between items-center mb-4">
-            <h2 className="text-xl font-bold">Flight Data</h2>
+            <h2 className="text-xl font-bold">Territory Data</h2>
             <button 
               onClick={() => setIsDrawerOpen(false)} 
               className="text-white hover:text-gray-300 text-xl font-bold"
@@ -265,18 +413,31 @@ const TerritoryMap = () => {
             </button>
           </div>
           
-          <button 
-            onClick={refreshFlightData}
-            disabled={isLoading}
-            className="mb-4 w-full px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 disabled:bg-gray-600"
-          >
-            {isLoading ? 'Refreshing...' : 'Refresh Flight Data'}
-          </button>
+          <div className="mb-4 space-y-2">
+            <button 
+              onClick={refreshFlightData}
+              disabled={isLoading || isMaritimeLoading}
+              className="w-full px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 disabled:bg-gray-600"
+            >
+              {(isLoading || isMaritimeLoading) ? 'Refreshing...' : 'Refresh All Data'}
+            </button>
+            
+            <button 
+              onClick={() => setIsRealTimeEnabled(!isRealTimeEnabled)}
+              className={`w-full px-4 py-2 rounded ${
+                isRealTimeEnabled 
+                  ? 'bg-blue-600 hover:bg-blue-700 text-white' 
+                  : 'bg-gray-600 hover:bg-gray-700 text-white'
+              }`}
+            >
+              {isRealTimeEnabled ? '🟢 Real-time: ON' : '⚫ Real-time: OFF'}
+            </button>
+          </div>
 
-          {isLoading && (
+          {(isLoading || isMaritimeLoading) && (
             <div className="text-center py-4">
               <div className="inline-block w-6 h-6 border-2 border-green-500 border-t-transparent rounded-full animate-spin mb-2"></div>
-              <p>Loading flight data...</p>
+              <p>Loading data...</p>
             </div>
           )}
           
@@ -285,36 +446,30 @@ const TerritoryMap = () => {
               <p className="text-red-200">{error}</p>
             </div>
           )}
-          
-          {flightData && flightData.flightsList && (
-            <div>
-              <p className="mb-4 text-green-400">
-                Found {flightData.flightsList.length} flights
-              </p>
-              
-              <div className="space-y-3">
+
+          {/* Flights Section */}
+          {flightData && flightData.flightsList && flightData.flightsList.length > 0 && (
+            <div className="mb-6">
+              <h3 className="text-lg font-bold text-green-400 mb-3">
+                ✈️ Flights ({flightData.flightsList.length})
+              </h3>
+              <div className="space-y-3 max-h-64 overflow-y-auto">
                 {flightData.flightsList.map((flight) => (
                   <div key={flight.flightid} className="bg-gray-800 rounded p-3 border border-gray-700">
                     <div className="flex justify-between items-start mb-2">
-                      <h3 className="font-bold text-green-400">
+                      <h4 className="font-bold text-green-400 text-sm">
                         {flight.callsign || 'Unknown Flight'}
-                      </h3>
+                      </h4>
                       <span className={`px-2 py-1 rounded text-xs ${
                         flight.status === 'NORMAL' ? 'bg-green-600' : 'bg-red-600'
                       }`}>
                         {flight.status}
                       </span>
                     </div>
-                    
-                    <div className="text-sm text-gray-300 space-y-1">
-                      <p><span className="text-gray-400">Aircraft:</span> {flight.icon}</p>
-                      <p><span className="text-gray-400">Altitude:</span> {flight.alt.toLocaleString()} ft</p>
+                    <div className="text-xs text-gray-300 space-y-1">
                       <p><span className="text-gray-400">Speed:</span> {flight.speed} kts</p>
-                      <p><span className="text-gray-400">Track:</span> {flight.track}°</p>
-                      <p><span className="text-gray-400">Source:</span> {flight.source}</p>
-                      <p><span className="text-gray-400">Coordinates:</span> {flight.lat.toFixed(4)}, {flight.lon.toFixed(4)}</p>
+                      <p><span className="text-gray-400">Altitude:</span> {flight.alt.toLocaleString()} ft</p>
                     </div>
-                    
                     <button
                       onClick={() => {
                         if (mapRef.current) {
@@ -325,15 +480,57 @@ const TerritoryMap = () => {
                           });
                         }
                       }}
-                      className="mt-2 w-full px-3 py-1 bg-blue-600 text-white rounded text-sm hover:bg-blue-700"
+                      className="mt-2 w-full px-2 py-1 bg-blue-600 text-white rounded text-xs hover:bg-blue-700"
                     >
-                      View on Map
+                      View
                     </button>
                   </div>
                 ))}
               </div>
             </div>
           )}
+
+          {/* Ships Section */}
+          {shipData && shipData.ships && shipData.ships.length > 0 && (
+            <div className="mb-6">
+              <h3 className="text-lg font-bold text-blue-400 mb-3">
+                🚢 Ships ({shipData.ships.length})
+              </h3>
+              <div className="space-y-3 max-h-64 overflow-y-auto">
+                {shipData.ships.map((ship, index) => {
+                  const shipId = ship.uuid || ship.mmsi || ship.imo || `ship-${index}`;
+                  const shipName = ship.name || ship.name_ais || 'Unknown Ship';
+                  return (
+                    <div key={shipId} className="bg-gray-800 rounded p-3 border border-gray-700">
+                      <h4 className="font-bold text-blue-400 text-sm mb-2">
+                        {shipName}
+                      </h4>
+                      <div className="text-xs text-gray-300 space-y-1">
+                        {(ship.type || ship.type_specific) && <p><span className="text-gray-400">Type:</span> {ship.type_specific || ship.type}</p>}
+                        {ship.country_name && <p><span className="text-gray-400">Country:</span> {ship.country_name}</p>}
+                        {ship.callsign && <p><span className="text-gray-400">Callsign:</span> {ship.callsign}</p>}
+                      </div>
+                      <button
+                        onClick={() => {
+                          if (mapRef.current && ship.lat !== undefined && ship.lon !== undefined) {
+                            mapRef.current.flyTo({
+                              center: [ship.lon, ship.lat],
+                              zoom: 10,
+                              essential: true
+                            });
+                          }
+                        }}
+                        className="mt-2 w-full px-2 py-1 bg-blue-600 text-white rounded text-xs hover:bg-blue-700"
+                      >
+                        View
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
         </div>
       )}
     </div>
