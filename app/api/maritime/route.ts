@@ -1,92 +1,101 @@
-import { NextResponse } from 'next/server';
+import WebSocket, { type RawData } from 'ws';
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
+
   const south = parseFloat(searchParams.get('south') || '-11');
   const west = parseFloat(searchParams.get('west') || '95');
   const north = parseFloat(searchParams.get('north') || '6');
   const east = parseFloat(searchParams.get('east') || '141');
 
-  const isValidCoordinate = (lat: number, lon: number) => {
-    return lat !== 0 && lon !== 0 && 
-           lat >= south && lat <= north && 
-           lon >= west && lon <= east;
-  };
+  const apiKey = process.env.AISSTREAM_API_KEY;
 
-  try {
-    const options = {
-      method: 'GET',
+  if (!apiKey) {
+    return new Response(JSON.stringify({ 
+      error: 'AISSTREAM_API_KEY is not configured on the server.' 
+    }), {
+      status: 500,
       headers: {
-        'x-rapidapi-key': process.env.RAPIDAPI_KEY || '',
-        'x-rapidapi-host': 'maritime-ships-and-ports-database.p.rapidapi.com'
-      }
-    };
-
-    console.log(`Fetching vessels for Indonesia (country_iso=ID)`);
-    
-    const url = `https://maritime-ships-and-ports-database.p.rapidapi.com/api/v0/vessel_find?country_iso=ID&limit=300`;
-    const response = await fetch(url, options);
-    
-    if (!response.ok) {
-      console.error('vessel_find failed:', response.status);
-      return NextResponse.json({ 
-        ships: [], 
-        data: [], 
-        results: [],
-        stats: { total: 0, valid: 0, invalid: 0 }
-      });
-    }
-
-    const result = await response.json();
-
-    let vessels: any[] = [];
-    
-    if (result.data?.vessels && Array.isArray(result.data.vessels)) {
-      vessels = result.data.vessels;
-    } else if (result.data && Array.isArray(result.data)) {
-      vessels = result.data;
-    } else if (Array.isArray(result)) {
-      vessels = result;
-    }
-
-    console.log(`Total vessels from API: ${vessels.length}`);
-
-    const validVessels = vessels.filter((vessel: any) => {
-      return vessel.lat !== undefined && 
-             vessel.lon !== undefined && 
-             isValidCoordinate(vessel.lat, vessel.lon);
-    });
-
-    console.log(`Valid vessels: ${validVessels.length}`);
-    console.log(`Invalid/missing coords: ${vessels.length - validVessels.length}`);
-
-    if (validVessels.length > 0) {
-      console.log('Sample vessel:', {
-        name: validVessels[0].name,
-        lat: validVessels[0].lat,
-        lon: validVessels[0].lon,
-        mmsi: validVessels[0].mmsi
-      });
-    }
-
-    return NextResponse.json({ 
-      ships: validVessels,
-      data: result.data || {},
-      results: validVessels,
-      stats: {
-        total: vessels.length,
-        valid: validVessels.length,
-        invalid: vessels.length - validVessels.length
-      }
-    });
-
-  } catch (error) {
-    console.error('Maritime API error:', error);
-    return NextResponse.json({ 
-      ships: [], 
-      data: [], 
-      results: [],
-      stats: { total: 0, valid: 0, invalid: 0 }
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-store',
+      },
     });
   }
+
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const ws = new WebSocket('wss://stream.aisstream.io/v0/stream');
+
+      const abort = () => {
+        try {
+          ws.close();
+        } catch (e) {
+          console.error('Error closing AIS WebSocket:', e);
+        }
+        controller.close();
+      };
+
+      ws.on('open', () => {
+        const payload: any = {
+          APIKey: apiKey,
+          BoundingBoxes: [
+            [
+              [north, west],
+              [south, east],
+            ],
+          ],
+          FilterMessageTypes: ['PositionReport', 'ShipStaticData'],
+        };
+
+        const mmsiParams = searchParams.getAll('mmsi');
+        if (mmsiParams.length > 0) {
+          payload.FiltersShipMMSI = mmsiParams;
+        }
+
+        ws.send(JSON.stringify(payload));
+
+        const hello = `data: ${JSON.stringify({ type: 'info', message: 'Connected to AISStream', payload })}\n\n`;
+        controller.enqueue(new TextEncoder().encode(hello));
+      });
+
+      ws.on('message', (data: RawData) => {
+        try {
+          const text = typeof data === 'string' ? data : data.toString();
+          const msg = `data: ${text}\n\n`;
+          controller.enqueue(new TextEncoder().encode(msg));
+        } catch (e) {
+          console.error('Error processing AIS message:', e);
+        }
+      });
+
+      ws.on('error', (err: Error) => {
+        console.error('AIS WebSocket error:', err);
+        const errorEvent = `data: ${JSON.stringify({ type: 'error', message: 'AIS WebSocket error' })}\n\n`;
+        controller.enqueue(new TextEncoder().encode(errorEvent));
+        abort();
+      });
+
+      ws.on('close', () => {
+        const closeEvent = `data: ${JSON.stringify({ type: 'info', message: 'AIS WebSocket closed' })}\n\n`;
+        controller.enqueue(new TextEncoder().encode(closeEvent));
+        controller.close();
+      });
+
+      (request as any).signal?.addEventListener('abort', () => {
+        abort();
+      });
+    },
+    cancel() { 
+    },
+  });
+
+  return new Response(stream, {
+    status: 200,
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache, no-transform',
+      'Connection': 'keep-alive',
+      'Access-Control-Allow-Origin': '*',
+    },
+  });
 }

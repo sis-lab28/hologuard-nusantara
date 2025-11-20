@@ -21,6 +21,10 @@ const TerritoryMap = () => {
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const flightMarkersRef = useRef<globalThis.Map<number, FlightMarker>>(new globalThis.Map<number, FlightMarker>());
   const shipMarkersRef = useRef<globalThis.Map<number | string, ShipMarker>>(new globalThis.Map<number | string, ShipMarker>());
+  const shipsStateRef = useRef<globalThis.Map<string, Ship>>(
+    new globalThis.Map<string, Ship>()
+  );
+  const maritimeEventSourceRef = useRef<EventSource | null>(null);
   const [flightData, setFlightData] = useState<FlightData | null>(null);
   const [shipData, setShipData] = useState<ShipData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -29,6 +33,8 @@ const TerritoryMap = () => {
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [isMapLoading, setIsMapLoading] = useState(true);
   const [isRealTimeEnabled, setIsRealTimeEnabled] = useState(false);
+  const [flightSearch, setFlightSearch] = useState('');
+  const [shipSearch, setShipSearch] = useState('');
   const refreshIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const indonesiaCenter: [number, number] = [118, -2];
@@ -54,7 +60,6 @@ const TerritoryMap = () => {
 
       flights.forEach((flight) => {
         try {
-          // Skip flights with invalid coordinates
           if (flight.lat === null || flight.lat === undefined || flight.lon === null || flight.lon === undefined) {
             console.warn('Skipping flight with invalid coordinates:', flight);
             return;
@@ -86,8 +91,6 @@ const TerritoryMap = () => {
 
             let labelMarker: mapboxgl.Marker | undefined;
             let labelElement: HTMLElement | undefined;
-
-            // Labels disabled - no label creation
 
             flightMarkersRef.current.set(flight.flightid, {
               marker: flightMarker,
@@ -128,7 +131,6 @@ const TerritoryMap = () => {
 
       ships.forEach((ship) => {
         try {
-          // Skip if no coordinates
           if (ship.lat === undefined || ship.lat === null || ship.lon === undefined || ship.lon === null) {
             console.warn('Ship missing coordinates:', ship);
             return;
@@ -160,8 +162,6 @@ const TerritoryMap = () => {
 
             let labelMarker: mapboxgl.Marker | undefined;
             let labelElement: HTMLElement | undefined;
-
-            // Labels disabled - no label creation
 
             shipMarkersRef.current.set(shipId, {
               marker: shipMarker,
@@ -211,7 +211,6 @@ const TerritoryMap = () => {
             setIsMapLoading(false);
             map.resize();
             fetchFlightData();
-            fetchMaritimeData();
           });
 
           map.on('style.load', () => {
@@ -267,46 +266,6 @@ const TerritoryMap = () => {
     };
   }, []);
 
-  const fetchMaritimeData = useCallback(async (silent: boolean = false) => {
-    if (!silent) {
-      setIsMaritimeLoading(true);
-    }
-    try {
-      console.log('Fetching maritime data...');
-      
-      // Fetch ships
-      const shipsResponse = await fetch('/api/maritime?type=ships');
-      if (shipsResponse.ok) {
-        const shipsData = await shipsResponse.json();
-        console.log('Ship data received:', shipsData);
-        
-        const ships = shipsData.ships || shipsData.data || shipsData.results || shipsData || [];
-        const shipsWithCoords = Array.isArray(ships) ? ships.filter((s: Ship) => s.lat !== undefined && s.lon !== undefined) : [];
-        
-        console.log(`Total ships received: ${ships.length}, Ships with coordinates: ${shipsWithCoords.length}`);
-        if (shipsWithCoords.length < ships.length) {
-          console.warn(`${ships.length - shipsWithCoords.length} ships missing coordinates`);
-        }
-        
-        setShipData({ ships: Array.isArray(ships) ? ships : [] });
-        
-        if (mapRef.current && shipsWithCoords.length > 0) {
-          console.log(`Updating ${shipsWithCoords.length} ships on map`);
-          updateShipMarkers(mapRef.current, shipsWithCoords);
-        } else if (mapRef.current && ships.length > 0) {
-          console.warn('Ships received but none have coordinates. Ships data:', ships.slice(0, 2));
-        }
-      }
-
-    } catch (error) {
-      console.error("Error fetching maritime data:", error);
-    } finally {
-      if (!silent) {
-        setIsMaritimeLoading(false);
-      }
-    }
-  }, []);
-
   const fetchFlightData = useCallback(async (silent: boolean = false) => {
     if (!silent) {
       setIsLoading(true);
@@ -348,30 +307,183 @@ const TerritoryMap = () => {
 
   useEffect(() => {
     if (!isRealTimeEnabled || !mapRef.current) {
+      if (maritimeEventSourceRef.current) {
+        maritimeEventSourceRef.current.close();
+        maritimeEventSourceRef.current = null;
+      }
       return;
     }
 
-    if (refreshIntervalRef.current) {
-      clearInterval(refreshIntervalRef.current);
+    if (maritimeEventSourceRef.current) {
+      return;
     }
 
-    refreshIntervalRef.current = setInterval(() => {
-      if (mapRef.current) {
-        fetchFlightData(true);
-        fetchMaritimeData(true);
-      }
-    }, 5000);
+    setIsMaritimeLoading(true);
 
-    return () => {
-      if (refreshIntervalRef.current) {
-        clearInterval(refreshIntervalRef.current);
+    const params = new URLSearchParams({
+      south: '-11',
+      west: '95',
+      north: '6',
+      east: '141',
+    });
+
+    const es = new EventSource(`/api/maritime?${params.toString()}`);
+    maritimeEventSourceRef.current = es;
+
+    es.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+
+        if (!data || data.type === 'info' || data.type === 'error') {
+          return;
+        }
+
+        const messageType = data.MessageType || data.messageType;
+        const meta = data.MetaData || data.Metadata || {};
+
+        if (messageType === 'PositionReport') {
+          const position = data.Message?.PositionReport || data.Message?.positionReport;
+          if (!position) {
+            return;
+          }
+
+          const latitude = meta.latitude ?? meta.Latitude ?? position.Latitude;
+          const longitude = meta.longitude ?? meta.Longitude ?? position.Longitude;
+          if (latitude == null || longitude == null) {
+            return;
+          }
+
+          const mmsiValue = meta.MMSI ?? position.UserID;
+          if (mmsiValue == null) {
+            return;
+          }
+
+          const mmsi = String(mmsiValue);
+          const shipId = mmsi;
+
+          const existing = shipsStateRef.current.get(shipId) || {};
+
+          const ship: Ship = {
+            ...existing,
+            mmsi,
+            lat: latitude,
+            lon: longitude,
+            speed: position.Sog,
+            course: position.Cog,
+            heading: position.TrueHeading,
+            nav_status_code: position.NavigationalStatus,
+            name: existing.name || meta.ShipName || meta.Name,
+            callsign: existing.callsign || meta.CallSign,
+            time_utc: meta.time_utc || (existing as Ship).time_utc,
+          };
+
+          if (mmsi === '352005564') {
+            console.log('AIS DEBUG MMSI 352005564 (PositionReport)', {
+              raw: data,
+              meta,
+              position,
+              mappedShip: ship,
+            });
+          }
+
+          shipsStateRef.current.set(shipId, ship);
+
+          const shipsArray = Array.from(shipsStateRef.current.values());
+          const shipsWithCoords = shipsArray.filter(
+            (s) => s.lat != null && s.lon != null,
+          ) as Ship[];
+
+          setShipData({ ships: shipsWithCoords });
+
+          if (mapRef.current && shipsWithCoords.length > 0) {
+            updateShipMarkers(mapRef.current, shipsWithCoords);
+          }
+
+          return;
+        }
+
+        if (messageType === 'ShipStaticData') {
+          const staticMsg = data.Message?.ShipStaticData || data.Message?.shipStaticData;
+          if (!staticMsg) {
+            return;
+          }
+
+          const mmsiValue = meta.MMSI ?? staticMsg.UserID;
+          if (mmsiValue == null) {
+            return;
+          }
+
+          const mmsi = String(mmsiValue);
+          const shipId = mmsi;
+
+          const existing = shipsStateRef.current.get(shipId) || {};
+
+          const ship: Ship = {
+            ...existing,
+            mmsi,
+            imo: staticMsg.ImoNumber ?? existing.imo,
+            callsign: staticMsg.CallSign || existing.callsign,
+            name: staticMsg.Name || existing.name,
+            type_code: staticMsg.Type ?? existing.type_code,
+            destination: staticMsg.Destination || existing.destination,
+            draught: staticMsg.MaximumStaticDraught ?? existing.draught,
+          };
+
+          if (mmsi === '352005564') {
+            console.log('AIS DEBUG MMSI 352005564 (ShipStaticData)', {
+              raw: data,
+              meta,
+              staticMsg,
+              mappedShip: ship,
+            });
+          }
+
+          shipsStateRef.current.set(shipId, ship);
+
+          const shipsArray = Array.from(shipsStateRef.current.values());
+
+          const shipsWithCoords = shipsArray.filter(
+            (s) => s.lat != null && s.lon != null,
+          ) as Ship[];
+
+          setShipData({ ships: shipsWithCoords });
+
+          if (mapRef.current && shipsWithCoords.length > 0) {
+            updateShipMarkers(mapRef.current, shipsWithCoords);
+          }
+
+          return;
+        }
+      } catch (err) {
+        console.error('Error parsing AIS SSE message:', err);
       }
     };
-  }, [isRealTimeEnabled, fetchFlightData, fetchMaritimeData]);
+
+    es.onerror = (event) => {
+      console.error('AIS SSE error event', {
+        type: event.type,
+        readyState: es.readyState,
+      });
+      setIsMaritimeLoading(false);
+      es.close();
+      maritimeEventSourceRef.current = null;
+    };
+
+    es.onopen = () => {
+      console.log('AIS SSE connection opened');
+      setIsMaritimeLoading(false);
+    };
+
+    return () => {
+      if (maritimeEventSourceRef.current) {
+        maritimeEventSourceRef.current.close();
+        maritimeEventSourceRef.current = null;
+      }
+    };
+  }, [isRealTimeEnabled]);
 
   const refreshFlightData = () => {
     fetchFlightData(false);
-    fetchMaritimeData(false);
   };
 
   return (
@@ -453,8 +565,26 @@ const TerritoryMap = () => {
               <h3 className="text-lg font-bold text-green-400 mb-3">
                 ✈️ Flights ({flightData.flightsList.length})
               </h3>
+              <input
+                type="text"
+                value={flightSearch}
+                onChange={(e) => setFlightSearch(e.target.value)}
+                placeholder="Search flights (callsign)"
+                className="mb-2 w-full px-2 py-1 rounded bg-gray-800 border border-gray-700 text-xs text-white placeholder-gray-400"
+              />
+              {flightSearch && (
+                <p className="text-xs text-gray-400 mb-1">
+                  Showing results for: <span className="font-mono">{flightSearch}</span>
+                </p>
+              )}
               <div className="space-y-3 max-h-64 overflow-y-auto">
-                {flightData.flightsList.map((flight) => (
+                {flightData.flightsList
+                  .filter((flight) => {
+                    if (!flightSearch.trim()) return true;
+                    const q = flightSearch.toLowerCase();
+                    return (flight.callsign || '').toLowerCase().includes(q);
+                  })
+                  .map((flight) => (
                   <div key={flight.flightid} className="bg-gray-800 rounded p-3 border border-gray-700">
                     <div className="flex justify-between items-start mb-2">
                       <h4 className="font-bold text-green-400 text-sm">
@@ -473,11 +603,22 @@ const TerritoryMap = () => {
                     <button
                       onClick={() => {
                         if (mapRef.current) {
-                          mapRef.current.flyTo({
+                          const map = mapRef.current;
+                          map.flyTo({
                             center: [flight.lon, flight.lat],
                             zoom: 10,
                             essential: true
                           });
+
+                          const handleMoveEnd = () => {
+                            const markerEntry = flightMarkersRef.current.get(flight.flightid);
+                            if (markerEntry?.marker) {
+                              markerEntry.marker.togglePopup();
+                            }
+                            map.off('moveend', handleMoveEnd);
+                          };
+
+                          map.on('moveend', handleMoveEnd);
                         }
                       }}
                       className="mt-2 w-full px-2 py-1 bg-blue-600 text-white rounded text-xs hover:bg-blue-700"
@@ -496,8 +637,33 @@ const TerritoryMap = () => {
               <h3 className="text-lg font-bold text-blue-400 mb-3">
                 🚢 Ships ({shipData.ships.length})
               </h3>
+              <input
+                type="text"
+                value={shipSearch}
+                onChange={(e) => setShipSearch(e.target.value)}
+                placeholder="Search ships (name, MMSI, IMO)"
+                className="mb-2 w-full px-2 py-1 rounded bg-gray-800 border border-gray-700 text-xs text-white placeholder-gray-400"
+              />
+              {shipSearch && (
+                <p className="text-xs text-gray-400 mb-1">
+                  Showing results for: <span className="font-mono">{shipSearch}</span>
+                </p>
+              )}
               <div className="space-y-3 max-h-64 overflow-y-auto">
-                {shipData.ships.map((ship, index) => {
+                {shipData.ships
+                  .filter((ship) => {
+                    if (!shipSearch.trim()) return true;
+                    const q = shipSearch.toLowerCase();
+                    const name = (ship.name || ship.name_ais || '').toLowerCase();
+                    const mmsi = String(ship.mmsi || '').toLowerCase();
+                    const imo = String(ship.imo || '').toLowerCase();
+                    return (
+                      name.includes(q) ||
+                      mmsi.includes(q) ||
+                      imo.includes(q)
+                    );
+                  })
+                  .map((ship, index) => {
                   const shipId = ship.uuid || ship.mmsi || ship.imo || `ship-${index}`;
                   const shipName = ship.name || ship.name_ais || 'Unknown Ship';
                   return (
@@ -506,18 +672,48 @@ const TerritoryMap = () => {
                         {shipName}
                       </h4>
                       <div className="text-xs text-gray-300 space-y-1">
-                        {(ship.type || ship.type_specific) && <p><span className="text-gray-400">Type:</span> {ship.type_specific || ship.type}</p>}
-                        {ship.country_name && <p><span className="text-gray-400">Country:</span> {ship.country_name}</p>}
-                        {ship.callsign && <p><span className="text-gray-400">Callsign:</span> {ship.callsign}</p>}
+                        {(ship.type || ship.type_specific || ship.type_code !== undefined) && (
+                          <p><span className="text-gray-400">Type:</span> {ship.type_specific || ship.type || ship.type_code}</p>
+                        )}
+                        {ship.imo && (
+                          <p><span className="text-gray-400">IMO:</span> {ship.imo}</p>
+                        )}
+                        {ship.callsign && (
+                          <p><span className="text-gray-400">Callsign:</span> {ship.callsign}</p>
+                        )}
+                        {ship.destination && (
+                          <p><span className="text-gray-400">Destination:</span> {ship.destination}</p>
+                        )}
+                        {ship.speed !== undefined && (
+                          <p><span className="text-gray-400">Speed:</span> {ship.speed} kts</p>
+                        )}
+                        {ship.course !== undefined && (
+                          <p><span className="text-gray-400">Course:</span> {ship.course}°</p>
+                        )}
+                        {ship.heading !== undefined && (
+                          <p><span className="text-gray-400">Heading:</span> {ship.heading}°</p>
+                        )}
                       </div>
                       <button
                         onClick={() => {
                           if (mapRef.current && ship.lat !== undefined && ship.lon !== undefined) {
-                            mapRef.current.flyTo({
+                            const map = mapRef.current;
+                            map.flyTo({
                               center: [ship.lon, ship.lat],
                               zoom: 10,
                               essential: true
                             });
+                            const markerKey = String(ship.uuid || ship.mmsi || ship.imo || `${ship.lat}-${ship.lon}`);
+
+                            const handleMoveEnd = () => {
+                              const markerEntry = shipMarkersRef.current.get(markerKey as any);
+                              if (markerEntry?.marker) {
+                                markerEntry.marker.togglePopup();
+                              }
+                              map.off('moveend', handleMoveEnd);
+                            };
+
+                            map.on('moveend', handleMoveEnd);
                           }
                         }}
                         className="mt-2 w-full px-2 py-1 bg-blue-600 text-white rounded text-xs hover:bg-blue-700"

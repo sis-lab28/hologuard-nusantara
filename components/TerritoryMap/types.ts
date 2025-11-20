@@ -40,11 +40,16 @@ export interface Ship {
   heading?: number;
   type?: string;
   type_specific?: string;
+  type_code?: number;
   country_name?: string;
   country_iso?: string;
   callsign?: string;
   home_port?: string | null;
   destination?: string;
+  nav_status_code?: number;
+  time_utc?: string;
+  eta?: string;
+  draught?: number;
 }
 
 export interface ShipData {

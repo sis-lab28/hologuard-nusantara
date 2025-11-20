@@ -80,22 +80,28 @@ export const createPopupHTML = (flight: Flight) => {
 
 export const createShipPopupHTML = (ship: Ship) => {
   const shipName = ship.name || ship.name_ais || 'Unknown Ship';
+  const formattedTimeUtc = ship.time_utc
+    ? ship.time_utc.replace(' +0000 UTC', ' UTC')
+    : undefined;
   return `
     <div class="popup-content" style="min-width: 200px;">
       <h3 class="popup-title" style="margin: 0 0 8px 0; font-weight: bold; color: #1f2937;">
-        🚢 ${shipName}
+        ${shipName}
       </h3>
       <div style="font-size: 12px; color: #4b5563;">
         ${ship.mmsi ? `<p style="margin: 2px 0;"><strong>MMSI:</strong> ${ship.mmsi}</p>` : '<p style="margin: 2px 0;"><strong>MMSI:</strong> -</p>'}
         ${ship.imo ? `<p style="margin: 2px 0;"><strong>IMO:</strong> ${ship.imo}</p>` : '<p style="margin: 2px 0;"><strong>IMO:</strong> -</p>'}
         ${ship.callsign ? `<p style="margin: 2px 0;"><strong>Callsign:</strong> ${ship.callsign}</p>` : '<p style="margin: 2px 0;"><strong>Callsign:</strong> -</p>'}
-        ${ship.type || ship.type_specific ? `<p style="margin: 2px 0;"><strong>Type:</strong> ${ship.type_specific || ship.type}</p>` : '<p style="margin: 2px 0;"><strong>Type:</strong> -</p>'}
+        ${ship.type || ship.type_specific || ship.type_code !== undefined ? `<p style="margin: 2px 0;"><strong>Type:</strong> ${ship.type_specific || ship.type || ship.type_code}</p>` : '<p style="margin: 2px 0;"><strong>Type:</strong> -</p>'}
         ${ship.speed !== undefined ? `<p style="margin: 2px 0;"><strong>Speed:</strong> ${ship.speed} kts</p>` : '<p style="margin: 2px 0;"><strong>Speed:</strong> -</p>'}
         ${ship.course !== undefined ? `<p style="margin: 2px 0;"><strong>Course:</strong> ${ship.course}°</p>` : '<p style="margin: 2px 0;"><strong>Course:</strong> -</p>'}
         ${ship.heading !== undefined ? `<p style="margin: 2px 0;"><strong>Heading:</strong> ${ship.heading}°</p>` : '<p style="margin: 2px 0;"><strong>Heading:</strong> -</p>'}
-        ${ship.country_name ? `<p style="margin: 2px 0;"><strong>Country:</strong> ${ship.country_name}</p>` : '<p style="margin: 2px 0;"><strong>Country:</strong> -</p>'}
-        ${ship.home_port ? `<p style="margin: 2px 0;"><strong>Home Port:</strong> ${ship.home_port}</p>` : '<p style="margin: 2px 0;"><strong>Home Port:</strong> -</p>'}
+        ${ship.draught !== undefined ? `<p style=\"margin: 2px 0;\"><strong>Draught:</strong> ${ship.draught} m</p>` : '<p style="margin: 2px 0;"><strong>Draught:</strong> -</p>'}
         ${ship.destination ? `<p style="margin: 2px 0;"><strong>Destination:</strong> ${ship.destination}</p>` : '<p style="margin: 2px 0;"><strong>Destination:</strong> -</p>'}
+        ${ship.nav_status_code !== undefined ? `<p style=\"margin: 2px 0;\"><strong>Nav Status Code:</strong> ${ship.nav_status_code}</p>` : ''}
+        ${formattedTimeUtc ? `<p style="margin: 2px 0;"><strong>Last Update (UTC):</strong> ${formattedTimeUtc}</p>` : ''}
+        ${ship.country_name ? `<p style="margin: 2px 0;"><strong>Country:</strong> ${ship.country_name}</p>` : ''}
+        ${ship.home_port ? `<p style="margin: 2px 0;"><strong>Home Port:</strong> ${ship.home_port}</p>` : ''}
         ${ship.lat !== undefined && ship.lon !== undefined ? `<p style="margin: 2px 0;"><strong>Coordinates:</strong> ${ship.lat.toFixed(4)}, ${ship.lon.toFixed(4)}</p>` : '<p style="margin: 2px 0;"><strong>Coordinates:</strong> -</p>'}
       </div>
     </div>
