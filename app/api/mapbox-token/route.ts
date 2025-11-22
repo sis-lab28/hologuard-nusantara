@@ -2,7 +2,7 @@ import { NextResponse } from "next/server"
 
 export async function GET() {
   // Get the token from the server-side environment variable
-  const mapboxToken = process.env.NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN || ""
+  const mapboxToken = process.env.MAPBOX_ACCESS_TOKEN || ""
 
   if (!mapboxToken) {
     console.error("MAPBOX_ACCESS_TOKEN is not set")
